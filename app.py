@@ -33,8 +33,18 @@ with tab1:
 
     st.dataframe(df[['timestamp', 'direction', 'Support', 'Resistance', 'open', 'high', 'low', 'close', 'volume']].head())
 
-    filtered_df["Support"] = filtered_df["Support"].apply(ast.literal_eval)
-    filtered_df["Resistance"] = filtered_df["Resistance"].apply(ast.literal_eval)
+    # Safely parse Support and Resistance columns
+    def safe_literal_eval(value):
+        # Handle NaN, None, or non-string values
+        if not isinstance(value, str) or value in [None, 'nan', '']:
+            return []
+        try:
+            return ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return []  # Return empty list for invalid entries
+
+    filtered_df["Support"] = filtered_df["Support"].apply(safe_literal_eval)
+    filtered_df["Resistance"] = filtered_df["Resistance"].apply(safe_literal_eval)
 
     support_lower = []
     support_upper = []
@@ -266,8 +276,9 @@ with tab3:
     if len(anim_df) > 100:
         st.warning("Large date ranges may slow down the animation due to the number of frames. Consider selecting a smaller range for better performance.")
 
-    anim_df["Support"] = anim_df["Support"].apply(ast.literal_eval)
-    anim_df["Resistance"] = anim_df["Resistance"].apply(ast.literal_eval)
+    # Safely parse Support and Resistance columns
+    anim_df["Support"] = anim_df["Support"].apply(safe_literal_eval)
+    anim_df["Resistance"] = anim_df["Resistance"].apply(safe_literal_eval)
 
     frames = []
     for i in range(len(anim_df)):
@@ -440,4 +451,4 @@ with tab3:
     )
 
     st.plotly_chart(fig_anim, use_container_width=True)    
-                 #python -m streamlit run app.py
+                     #python -m streamlit run app.py
