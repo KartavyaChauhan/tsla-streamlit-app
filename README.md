@@ -1,4 +1,5 @@
 TSLA Streamlit App
+
 This Streamlit app visualizes TSLA stock data with a candlestick chart, a Gemini API chatbot, and an animated replay of the chart, similar to a TradingView backtest. The app is deployed on Streamlit Cloud at https://tsla-app-app-kkgnwh59w4waulii6gqf7j.streamlit.app/.
 Features
 
@@ -34,8 +35,8 @@ Run the app locally:streamlit run app.py
 
 
 Deployment
-The app is deployed on Streamlit Cloud. To deploy your own instance:
 
+The app is deployed on Streamlit Cloud. To deploy your own instance:
 Push the code to a GitHub repository.
 Link the repository to Streamlit Cloud and deploy.
 Add GEMINI_API_KEY to Streamlit Cloud secrets.
@@ -44,6 +45,3 @@ Notes
 
 The Gemini API quota limitation affects the chatbot tab until the reset time. The chart and animation tabs are fully functional.
 For large date ranges in the animation tab, performance may vary due to the number of frames.
-
-Contact
-For feedback or questions, reach out to the project owner or email team@indiancapital.in.
