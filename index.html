@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSLA Stock Dashboard</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.6/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 600px;
+        }
+        #file-input {
+            margin-bottom: 20px;
+        }
+        #error-message {
+            color: #ef5350;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <input type="file" id="file-input" accept=".csv" />
+    <div id="error-message"></div>
+    <div id="chart"></div>
+
+    <script>
+        const errorMessageDiv = document.getElementById('error-message');
+
+        // Function to display an error message on the page
+        function showError(message) {
+            errorMessageDiv.style.display = 'block';
+            errorMessageDiv.textContent = message;
+        }
+
+        // Function to parse dates in multiple formats
+        function parseDate(dateStr) {
+            const formats = [
+                { format: 'YYYY-MM-DD', parse: str => new Date(str) },
+                { format: 'MM/DD/YYYY', parse: str => {
+                    const [month, day, year] = str.split('/').map(Number);
+                    return new Date(year, month - 1, day);
+                }},
+                { format: 'DD-MM-YYYY', parse: str => {
+                    const [day, month, year] = str.split('-').map(Number);
+                    return new Date(year, month - 1, day);
+                }}
+            ];
+
+            for (const { format, parse } of formats) {
+                const date = parse(dateStr);
+                if (!isNaN(date.getTime())) {
+                    return date;
+                }
+            }
+            console.warn(`Invalid date format: ${dateStr}`);
+            return null;
+        }
+
+        // Function to initialize the chart
+        function initializeChart(data) {
+            console.log("Initializing chart with data:", data);
+
+            // Validate and convert data to Lightweight Charts format
+            const candlestickData = data.map((item, index) => {
+                try {
+                    const date = parseDate(item.timestamp);
+                    if (!date || isNaN(date.getTime())) {
+                        throw new Error(`Invalid date at row ${index + 1}: ${item.timestamp}`);
+                    }
+
+                    const open = parseFloat(item.open);
+                    const high = parseFloat(item.high);
+                    const low = parseFloat(item.low);
+                    const close = parseFloat(item.close);
+
+                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+                        throw new Error(`Invalid numeric values at row ${index + 1}: open=${item.open}, high=${item.high}, low=${item.low}, close=${item.close}`);
+                    }
+
+                    // Format the time as YYYY-MM-DD string for Lightweight Charts
+                    const timeStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+                    const candlestickEntry = {
+                        time: timeStr, // Use string format instead of UNIX timestamp
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                        direction: item.direction
+                    };
+
+                    console.log(`Row ${index + 1}: Date: ${date}, Time: ${timeStr}, Candlestick:`, candlestickEntry);
+
+                    return candlestickEntry;
+                } catch (e) {
+                    console.error(`Error parsing data at row ${index + 1}:`, item, e);
+                    return null;
+                }
+            }).filter(item => item !== null);
+
+            console.log("Candlestick data:", candlestickData);
+
+            if (candlestickData.length === 0) {
+                showError("No valid data to display. Please check the CSV file format.");
+                console.error("No valid candlestick data to display.");
+                return;
+            }
+
+            // Create the chart
+            const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+                width: window.innerWidth - 40,
+                height: 600,
+                layout: {
+                    background: { color: '#1a1a1a' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2a2e39' },
+                    horzLines: { color: '#2a2e39' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            // Add candlestick series
+            const candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+            candlestickSeries.setData(candlestickData);
+
+            // Add markers for direction
+            const markers = candlestickData.map(item => {
+                const position = item.direction === "SHORT" ? "aboveBar" : "belowBar";
+                const shape = item.direction === "LONG" ? "arrowUp" : item.direction === "SHORT" ? "arrowDown" : "circle";
+                const color = item.direction === "LONG" ? "#26a69a" : item.direction === "SHORT" ? "#ef5350" : "#ffeb3b";
+                return {
+                    time: item.time,
+                    position: position,
+                    shape: shape,
+                    color: color,
+                    size: 1,
+                };
+            });
+            candlestickSeries.setMarkers(markers);
+
+            // Fit the chart to the data
+            chart.timeScale().fitContent();
+
+            window.addEventListener('resize', () => {
+                chart.resize(window.innerWidth - 40, 600);
+            });
+        }
+
+        // Handle file input for CSV loading
+        const fileInput = document.getElementById('file-input');
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                showError("No file selected.");
+                console.error("No file selected.");
+                return;
+            }
+
+            Papa.parse(file, {
+                header: true,
+                complete: function(results) {
+                    const data = results.data;
+                    console.log("Loaded CSV data:", data);
+                    if (data && data.length > 0) {
+                        initializeChart(data);
+                    } else {
+                        showError("No data loaded from CSV.");
+                        console.error("No data loaded from CSV.");
+                        // Fallback to sample data
+                        const sampleData = [
+                            { timestamp: "2023-01-01", open: 123.45, high: 125.00, low: 122.00, close: 124.50, direction: "LONG" },
+                            { timestamp: "2023-01-02", open: 124.50, high: 126.50, low: 123.00, close: 125.00, direction: "SHORT" },
+                            { timestamp: "2023-01-03", open: 125.00, high: 127.00, low: 124.00, close: 126.00, direction: "None" },
+                        ];
+                        initializeChart(sampleData);
+                    }
+                },
+                error: function(error) {
+                    showError("Error parsing CSV: " + error.message);
+                    console.error("Error parsing CSV:", error);
+                    // Fallback to sample data
+                    const sampleData = [
+                        { timestamp: "2023-01-01", open: 123.45, high: 125.00, low: 122.00, close: 124.50, direction: "LONG" },
+                        { timestamp: "2023-01-02", open: 124.50, high: 126.50, low: 123.00, close: 125.00, direction: "SHORT" },
+                        { timestamp: "2023-01-03", open: 125.00, high: 127.00, low: 124.00, close: 126.00, direction: "None" },
+                    ];
+                    initializeChart(sampleData);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

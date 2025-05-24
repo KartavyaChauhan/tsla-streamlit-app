@@ -1,8 +1,9 @@
 import pandas as pd
 from time import sleep
-from lightweight_charts import Chart
 import ast
 import streamlit as st
+import streamlit.components.v1 as components
+import json
 import google.generativeai as genai
 
 # Initialize Gemini API with enhanced error handling
@@ -30,6 +31,7 @@ def load_data():
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.rename(columns={'timestamp': 'time'})
         
+        # Parse Support and Resistance columns
         if 'Support' in df.columns:
             df['Support'] = df['Support'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
         else:
@@ -59,138 +61,281 @@ def get_bar_data(symbol, timeframe):
         return df
     return df
 
-def on_search(chart, searched_string):
-    new_data = get_bar_data(searched_string, chart.topbar['timeframe'].value)
-    if new_data.empty:
-        return
-    chart.topbar['symbol'].set(searched_string)
-    chart.set(new_data[['time', 'open', 'high', 'low', 'close', 'volume']])
-
-def on_timeframe_selection(chart):
-    new_data = get_bar_data(chart.topbar['symbol'].value, chart.topbar['timeframe'].value)
-    if new_data.empty:
-        return
-    chart.set(new_data[['time', 'open', 'high', 'low', 'close', 'volume']], True)
-
-def on_horizontal_line_move(chart, line):
-    st.write(f'Horizontal line moved to: {line.price}')
-
 def render_chart():
-    # Initialize chart only if not already done
-    if 'chart_initialized' not in st.session_state:
-        st.session_state.chart_initialized = False
-        st.session_state.chart = None
+    # Load data
+    df = get_bar_data('TSLA', '5min')
+    if df.empty:
+        st.error("No data to display.")
+        return
 
-    if not st.session_state.chart_initialized:
-        chart = Chart(toolbox=True)
-        chart.events.search += on_search
-        chart.topbar.textbox('symbol', 'TSLA')
-        chart.topbar.switcher('timeframe', ('1min', '5min', '30min'), default='5min', func=on_timeframe_selection)
+    # Debug: Display the data and unique direction values
+    st.write("Debug - DataFrame Shape:", df.shape)
+    st.write("Debug - Unique Direction Values:", df['direction'].unique())
 
-        chart.layout(background_color='#090008', text_color='#FFFFFF', font_size=16, font_family='Helvetica')
-        chart.candle_style(up_color='#00ff55', down_color='#ed4807', border_up_color='#FFFFFF', border_down_color='#FFFFFF', wick_up_color='#FFFFFF', wick_down_color='#FFFFFF')
-        chart.volume_config(up_color='#00ff55', down_color='#ed4807')
-        chart.watermark('1D', color='rgba(180, 180, 240, 0.7)')
-        chart.crosshair(mode='normal', vert_color='#FFFFFF', vert_style='dotted', horz_color='#FFFFFF', horz_style='dotted')
-        chart.legend(visible=True, font_size=14)
-        chart.horizontal_line(200, func=on_horizontal_line_move)
+    # Prepare candlestick data
+    candlestick_data = []
+    for _, row in df.iterrows():
+        timestamp = int(row['time'].timestamp())
+        candlestick_data.append({
+            "time": timestamp,
+            "open": float(row['open']),
+            "high": float(row['high']),
+            "low": float(row['low']),
+            "close": float(row['close'])
+        })
 
-        df = get_bar_data('TSLA', '5min')
-        if df.empty:
-            st.error("No data to display.")
-            return
+    # Prepare volume data
+    volume_data = []
+    for _, row in df.iterrows():
+        timestamp = int(row['time'].timestamp())
+        volume_data.append({
+            "time": timestamp,
+            "value": float(row['volume']),
+            "color": "#00ff55" if row['close'] >= row['open'] else "#ed4807"
+        })
 
-        initial_rows = 20
-        chart.set(df[['time', 'open', 'high', 'low', 'close', 'volume']].iloc[:initial_rows])
-        
-        support_lower = chart.create_line('Support Lower', color='#00FF55', width=3, style='dashed')
-        support_upper = chart.create_line('Support Upper', color='#00FF55', width=3, style='dashed')
-        resistance_lower = chart.create_line('Resistance Lower', color='#ED4807', width=3, style='dashed')
-        resistance_upper = chart.create_line('Resistance Upper', color='#ED4807', width=3, style='dashed')
-
-        try:
-            chart.show(block=False)  # Open chart in a separate window
-            st.session_state.chart_initialized = True
-            st.session_state.chart = chart
-            st.session_state.support_lower = support_lower
-            st.session_state.support_upper = support_upper
-            st.session_state.resistance_lower = resistance_lower
-            st.session_state.resistance_upper = resistance_upper
-            st.session_state.df = df
-            st.session_state.initial_rows = initial_rows
-            st.session_state.last_close = df.iloc[initial_rows - 1]['close']
-            st.session_state.support_lower_points = []
-            st.session_state.support_upper_points = []
-            st.session_state.resistance_lower_points = []
-            st.session_state.resistance_upper_points = []
-        except Exception as e:
-            st.error(f"Error initializing chart: {str(e)}")
-            return
-
-    # Use stored chart and data
-    chart = st.session_state.chart
-    df = st.session_state.df
-    support_lower = st.session_state.support_lower
-    support_upper = st.session_state.support_upper
-    resistance_lower = st.session_state.resistance_lower
-    resistance_upper = st.session_state.resistance_upper
-    initial_rows = st.session_state.initial_rows
-    last_close = st.session_state.last_close
-    support_lower_points = st.session_state.support_lower_points
-    support_upper_points = st.session_state.support_upper_points
-    resistance_lower_points = st.session_state.resistance_lower_points
-    resistance_upper_points = st.session_state.resistance_upper_points
-
-    # Continue animation only if not already completed
-    if 'current_row' not in st.session_state:
-        st.session_state.current_row = initial_rows
-
-    for i in range(st.session_state.current_row, len(df)):
-        row = df.iloc[i]
-        chart.update(row[['time', 'open', 'high', 'low', 'close', 'volume']])
-
-        if row['direction'] == 'LONG':
-            chart.marker(time=row['time'], position='below', shape='arrow_up', color='#00ff55', text='LONG')
-        elif row['direction'] == 'SHORT':
-            chart.marker(time=row['time'], position='above', shape='arrow_down', color='#ed4807', text='SHORT')
-        elif row['direction'] is None:
-            chart.marker(time=row['time'], position='above', shape='square', color="#FFFF00", text='Neutral', size=20)
-
+    # Prepare support and resistance lines
+    support_lower_data = []
+    support_upper_data = []
+    resistance_lower_data = []
+    resistance_upper_data = []
+    for _, row in df.iterrows():
+        timestamp = int(row['time'].timestamp())
         if row['Support'] and isinstance(row['Support'], list) and len(row['Support']) > 0 and all(isinstance(x, (int, float)) for x in row['Support']):
-            support_lower_points.append({'time': row['time'], 'Support Lower': min(row['Support'])})
-            support_upper_points.append({'time': row['time'], 'Support Upper': max(row['Support'])})
+            support_lower_data.append({"time": timestamp, "value": min(row['Support'])})
+            support_upper_data.append({"time": timestamp, "value": max(row['Support'])})
         if row['Resistance'] and isinstance(row['Resistance'], list) and len(row['Resistance']) > 0 and all(isinstance(x, (int, float)) for x in row['Resistance']):
-            resistance_lower_points.append({'time': row['time'], 'Resistance Lower': min(row['Resistance'])})
-            resistance_upper_points.append({'time': row['time'], 'Resistance Upper': max(row['Resistance'])})
+            resistance_lower_data.append({"time": timestamp, "value": min(row['Resistance'])})
+            resistance_upper_data.append({"time": timestamp, "value": max(row['Resistance'])})
 
-        if support_lower_points:
-            support_lower.set(pd.DataFrame(support_lower_points))
-            support_upper.set(pd.DataFrame(support_upper_points))
-        if resistance_lower_points:
-            resistance_lower.set(pd.DataFrame(resistance_lower_points))
-            resistance_upper.set(pd.DataFrame(resistance_upper_points))
+    # Prepare markers
+    markers = []
+    last_close = None
+    for i, row in df.iterrows():
+        timestamp = int(row['time'].timestamp())
+        current_close = float(row['close'])
+        marker = {"time": timestamp}
+        
+        # Direction markers
+        direction = row['direction']
+        if direction == 'LONG':
+            marker.update({"position": "below", "shape": "arrowUp", "color": "#00ff55", "text": "LONG", "offset": -5})
+        elif direction == 'SHORT':
+            marker.update({"position": "above", "shape": "arrowDown", "color": "#ed4807", "text": "SHORT", "offset": 5})
+        else:  # Handle None, "None", empty string, NaN, or any other value as Neutral
+            marker.update({"position": "above", "shape": "circle", "color": "#FFFF00", "text": "Neutral", "offset": 5})
 
-        if row['close'] > 20 and last_close < 20:
-            chart.marker(text='The price crossed $20!')
-        last_close = row['close']
-        st.session_state.last_close = last_close
-        st.session_state.current_row = i + 1
-        sleep(0.1)
+        # Price crossing $20 marker
+        if last_close is not None and current_close > 20 and last_close < 20:
+            marker.update({"position": "above", "shape": "circle", "color": "#FFFFFF", "text": "The price crossed $20!", "offset": 5})
+        
+        markers.append(marker)  # Always add the marker, since every row should have one
+        last_close = current_close
+
+    # Convert data to JSON for JavaScript
+    candlestick_json = json.dumps(candlestick_data)
+    volume_json = json.dumps(volume_data)
+    support_lower_json = json.dumps(support_lower_data)
+    support_upper_json = json.dumps(support_upper_data)
+    resistance_lower_json = json.dumps(resistance_lower_data)
+    resistance_upper_json = json.dumps(resistance_upper_data)
+    markers_json = json.dumps(markers)
+
+    # Debug: Display the prepared data
+    st.write("Debug - Candlestick Data Length:", len(candlestick_data))
+    st.write("Debug - Volume Data Length:", len(volume_data))
+    st.write("Debug - Support Lower Data Length:", len(support_lower_data))
+    st.write("Debug - Support Upper Data Length:", len(support_upper_data))
+    st.write("Debug - Resistance Lower Data Length:", len(resistance_lower_data))
+    st.write("Debug - Resistance Upper Data Length:", len(resistance_upper_data))
+    st.write("Debug - Markers Length:", len(markers))
+
+    # HTML and JavaScript code to render TradingView Lightweight Charts with animation
+    chart_html = f"""
+    <html>
+    <head>
+        <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    </head>
+    <body>
+        <div id="chart" style="width: 100%; height: 600px;"></div>
+        <script>
+            const chart = LightweightCharts.createChart(document.getElementById('chart'), {{
+                width: document.getElementById('chart').offsetWidth,
+                height: 600,
+                layout: {{
+                    background: {{ color: '#090008' }},
+                    textColor: '#FFFFFF',
+                    fontSize: 16,
+                    fontFamily: 'Helvetica'
+                }},
+                grid: {{
+                    vertLines: {{ color: '#444' }},
+                    horzLines: {{ color: '#444' }},
+                }},
+                timeScale: {{
+                    timeVisible: true,
+                    secondsVisible: false,
+                    barSpacing: 10,  // Increase spacing between candlesticks
+                }},
+                rightPriceScale: {{
+                    scaleMargins: {{ top: 0.1, bottom: 0.1 }},  // Add padding to price scale
+                }},
+                crosshair: {{
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: {{
+                        color: '#FFFFFF',
+                        style: LightweightCharts.LineStyle.Dotted,
+                    }},
+                    horzLine: {{
+                        color: '#FFFFFF',
+                        style: LightweightCharts.LineStyle.Dotted,
+                    }}
+                }}
+            }});
+
+            // Add candlestick series
+            const candlestickSeries = chart.addCandlestickSeries({{
+                upColor: '#00ff55',
+                downColor: '#ed4807',
+                borderUpColor: '#FFFFFF',
+                borderDownColor: '#FFFFFF',
+                wickUpColor: '#FFFFFF',
+                wickDownColor: '#FFFFFF'
+            }});
+            const candlestickData = {candlestick_json};
+
+            // Add volume series
+            const volumeSeries = chart.addHistogramSeries({{
+                priceFormat: {{ type: 'volume' }},
+                priceScaleId: '',
+                scaleMargins: {{ top: 0.8, bottom: 0 }}
+            }});
+            const volumeData = {volume_json};
+
+            // Add support and resistance lines
+            const supportLowerSeries = chart.addLineSeries({{ color: '#00FF55', lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Support Lower' }});
+            const supportLowerData = {support_lower_json};
+
+            const supportUpperSeries = chart.addLineSeries({{ color: '#00FF55', lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Support Upper' }});
+            const supportUpperData = {support_upper_json};
+
+            const resistanceLowerSeries = chart.addLineSeries({{ color: '#ED4807', lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Resistance Lower' }});
+            const resistanceLowerData = {resistance_lower_json};
+
+            const resistanceUpperSeries = chart.addLineSeries({{ color: '#ED4807', lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Resistance Upper' }});
+            const resistanceUpperData = {resistance_upper_json};
+
+            // Add markers
+            const markers = {markers_json};
+
+            // Add horizontal line at $200
+            const horizontalLine = chart.addLineSeries({{ color: '#FFFFFF', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, price: 200 }});
+            horizontalLine.createPriceLine({{
+                price: 200,
+                color: '#FFFFFF',
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: '$200'
+            }});
+
+            // Add watermark
+            chart.applyOptions({{
+                watermark: {{
+                    color: 'rgba(180, 180, 240, 0.7)',
+                    visible: true,
+                    text: '1D'
+                }}
+            }});
+
+            // Enable legend
+            chart.applyOptions({{
+                layout: {{
+                    fontSize: 14
+                }}
+            }});
+
+            // Animation: Add data points one at a time
+            let candlestickIndex = 0;
+            let volumeIndex = 0;
+            let supportLowerIndex = 0;
+            let supportUpperIndex = 0;
+            let resistanceLowerIndex = 0;
+            let resistanceUpperIndex = 0;
+            let markerIndex = 0;
+
+            function updateChart() {{
+                if (candlestickIndex < candlestickData.length) {{
+                    candlestickSeries.update(candlestickData[candlestickIndex]);
+                    candlestickIndex++;
+                }}
+                if (volumeIndex < volumeData.length) {{
+                    volumeSeries.update(volumeData[volumeIndex]);
+                    volumeIndex++;
+                }}
+                if (supportLowerIndex < supportLowerData.length) {{
+                    supportLowerSeries.update(supportLowerData[supportLowerIndex]);
+                    supportLowerIndex++;
+                }}
+                if (supportUpperIndex < supportUpperData.length) {{
+                    supportUpperSeries.update(supportUpperData[supportUpperIndex]);
+                    supportUpperIndex++;
+                }}
+                if (resistanceLowerIndex < resistanceLowerData.length) {{
+                    resistanceLowerSeries.update(resistanceLowerData[resistanceLowerIndex]);
+                    resistanceLowerIndex++;
+                }}
+                if (resistanceUpperIndex < resistanceUpperData.length) {{
+                    resistanceUpperSeries.update(resistanceUpperData[resistanceUpperIndex]);
+                    resistanceUpperIndex++;
+                }}
+                if (markerIndex < markers.length) {{
+                    candlestickSeries.setMarkers(markers.slice(0, markerIndex + 1));
+                    markerIndex++;
+                }}
+                if (candlestickIndex < candlestickData.length || 
+                    volumeIndex < volumeData.length || 
+                    supportLowerIndex < supportLowerData.length || 
+                    supportUpperIndex < supportUpperData.length || 
+                    resistanceLowerIndex < resistanceLowerData.length || 
+                    resistanceUpperIndex < resistanceUpperData.length || 
+                    markerIndex < markers.length) {{
+                    setTimeout(updateChart, 100);
+                }}
+            }}
+            updateChart();
+
+            // Auto-resize chart on window resize
+            window.addEventListener('resize', () => {{
+                chart.resize(document.getElementById('chart').offsetWidth, 600);
+            }});
+
+            // Adjust time scale to fit all data
+            chart.timeScale().fitContent();
+        </script>
+    </body>
+    </html>
+    """
+
+    # Render the chart using Streamlit's components.html
+    components.html(chart_html, height=600)
 
 # Chatbot function (unchanged)
 def chatbot_interface():
     st.header("TSLA Data Chatbot")
     if not gemini_available:
-        st.warning("Chatbot is disabled due to API key issues.")
+        st.warning("Chartbot is disabled due to API key issues.")
         return
 
     st.write("Ask questions about the TSLA stock data (e.g., 'How many days in 2023 was TSLA bullish?')")
 
+    # Load data
     df = load_data()
     if df.empty:
         st.error("No data available for the chatbot.")
         return
 
+    # Create a comprehensive data summary
     df['year'] = df['time'].dt.year
     df['month'] = df['time'].dt.month
     bullish_days = df[df['close'] > df['open']].groupby('year').size().to_string()
@@ -201,6 +346,7 @@ def chatbot_interface():
         'low': 'min',
         'volume': 'mean'
     }).to_string()
+    # Sample one row per year
     sample_rows = df.groupby('year').apply(lambda x: x.sample(1)).to_string()
     context = f"""You are a financial analyst assistant. You have access to TSLA stock data from 2022 to May 2025 with columns: {', '.join(df.columns)}. 
     Summary statistics:
@@ -211,29 +357,37 @@ def chatbot_interface():
     Sample data (one row per year):\n{sample_rows}
     Answer questions based on this data. Provide concise and accurate answers."""
 
+    # Initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
+    # Chat input
     user_input = st.chat_input("Ask a question about TSLA data")
     if user_input:
+        # Append user message
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
 
+        # Generate response
         try:
             prompt = f"{context}\n\nQuestion: {user_input}"
             response = model.generate_content(prompt)
             answer = response.text
+
+            # Append assistant response
             st.session_state.messages.append({"role": "assistant", "content": answer})
             with st.chat_message("assistant"):
                 st.markdown(answer)
         except Exception as e:
             st.error(f"Error generating response: {str(e)}")
 
+    # Example questions (updated for 2022–2025 data)
     st.subheader("Example Questions")
     example_questions = [
         "Which month in 2022 had the most Neutral signals?",
@@ -252,7 +406,6 @@ def main():
 
     with tab1:
         st.header("TSLA Candlestick Chart")
-        st.write("The chart will open in a separate window.")
         render_chart()
 
     with tab2:
