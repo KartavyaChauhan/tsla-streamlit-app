@@ -1,9 +1,8 @@
 import pandas as pd
 from time import sleep
-import ast
+import json
 import streamlit as st
 import streamlit.components.v1 as components
-import json
 import google.generativeai as genai
 
 # Initialize Gemini API with enhanced error handling
@@ -33,13 +32,13 @@ def load_data():
         
         # Parse Support and Resistance columns
         if 'Support' in df.columns:
-            df['Support'] = df['Support'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+            df['Support'] = df['Support'].apply(lambda x: json.loads(x) if isinstance(x, str) else x)
         else:
             df['Support'] = [[] for _ in range(len(df))]
             df['Support'] = df['close'].apply(lambda x: [x - 20, x - 10, x])
         
         if 'Resistance' in df.columns:
-            df['Resistance'] = df['Resistance'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+            df['Resistance'] = df['Resistance'].apply(lambda x: json.loads(x) if isinstance(x, str) else x)
         else:
             df['Resistance'] = [[] for _ in range(len(df))]
             df['Resistance'] = df['close'].apply(lambda x: [x + 10, x + 20, x + 30])
@@ -67,10 +66,6 @@ def render_chart():
     if df.empty:
         st.error("No data to display.")
         return
-
-    # Debug: Display the data and unique direction values
-    st.write("Debug - DataFrame Shape:", df.shape)
-    st.write("Debug - Unique Direction Values:", df['direction'].unique())
 
     # Prepare candlestick data
     candlestick_data = []
@@ -108,29 +103,45 @@ def render_chart():
             resistance_lower_data.append({"time": timestamp, "value": min(row['Resistance'])})
             resistance_upper_data.append({"time": timestamp, "value": max(row['Resistance'])})
 
-    # Prepare markers
+    # Prepare markers with explicit price levels
     markers = []
-    last_close = None
-    for i, row in df.iterrows():
+    for _, row in df.iterrows():
         timestamp = int(row['time'].timestamp())
         current_close = float(row['close'])
-        marker = {"time": timestamp}
-        
-        # Direction markers
-        direction = row['direction']
-        if direction == 'LONG':
-            marker.update({"position": "below", "shape": "arrowUp", "color": "#00ff55", "text": "LONG", "offset": -5})
-        elif direction == 'SHORT':
-            marker.update({"position": "above", "shape": "arrowDown", "color": "#ed4807", "text": "SHORT", "offset": 5})
-        else:  # Handle None, "None", empty string, NaN, or any other value as Neutral
-            marker.update({"position": "above", "shape": "circle", "color": "#FFFF00", "text": "Neutral", "offset": 5})
+        current_high = float(row['high'])
+        current_low = float(row['low'])
+        candle_height = current_high - current_low
+        buffer = candle_height * 0.2  # 20% of candle height for spacing
 
-        # Price crossing $20 marker
-        if last_close is not None and current_close > 20 and last_close < 20:
-            marker.update({"position": "above", "shape": "circle", "color": "#FFFFFF", "text": "The price crossed $20!", "offset": 5})
-        
-        markers.append(marker)  # Always add the marker, since every row should have one
-        last_close = current_close
+        marker = {"time": timestamp}
+        direction = row['direction']
+
+        if direction == 'LONG':
+            marker.update({
+                "position": "belowBar",
+                "shape": "arrowUp",
+                "color": "#00ff55",  # Green
+                "text": "LONG",
+                "price": current_low - buffer  # Below the candlestick
+            })
+        elif direction == 'SHORT':
+            marker.update({
+                "position": "aboveBar",
+                "shape": "arrowDown",
+                "color": "#ed4807",  # Red
+                "text": "SHORT",
+                "price": current_high + buffer  # Above the candlestick
+            })
+        else:  # Neutral
+            marker.update({
+                "position": "inBar",
+                "shape": "circle",
+                "color": "#FFFF00",  # Yellow
+                "text": "Neutral",
+                "price": current_close  # At the candlestick level
+            })
+
+        markers.append(marker)
 
     # Convert data to JSON for JavaScript
     candlestick_json = json.dumps(candlestick_data)
@@ -140,15 +151,6 @@ def render_chart():
     resistance_lower_json = json.dumps(resistance_lower_data)
     resistance_upper_json = json.dumps(resistance_upper_data)
     markers_json = json.dumps(markers)
-
-    # Debug: Display the prepared data
-    st.write("Debug - Candlestick Data Length:", len(candlestick_data))
-    st.write("Debug - Volume Data Length:", len(volume_data))
-    st.write("Debug - Support Lower Data Length:", len(support_lower_data))
-    st.write("Debug - Support Upper Data Length:", len(support_upper_data))
-    st.write("Debug - Resistance Lower Data Length:", len(resistance_lower_data))
-    st.write("Debug - Resistance Upper Data Length:", len(resistance_upper_data))
-    st.write("Debug - Markers Length:", len(markers))
 
     # HTML and JavaScript code to render TradingView Lightweight Charts with animation
     chart_html = f"""
@@ -175,21 +177,10 @@ def render_chart():
                 timeScale: {{
                     timeVisible: true,
                     secondsVisible: false,
-                    barSpacing: 10,  // Increase spacing between candlesticks
+                    barSpacing: 15,  // Increased spacing between candlesticks
                 }},
                 rightPriceScale: {{
-                    scaleMargins: {{ top: 0.1, bottom: 0.1 }},  // Add padding to price scale
-                }},
-                crosshair: {{
-                    mode: LightweightCharts.CrosshairMode.Normal,
-                    vertLine: {{
-                        color: '#FFFFFF',
-                        style: LightweightCharts.LineStyle.Dotted,
-                    }},
-                    horzLine: {{
-                        color: '#FFFFFF',
-                        style: LightweightCharts.LineStyle.Dotted,
-                    }}
+                    scaleMargins: {{ top: 0.2, bottom: 0.2 }},  // Padding for markers
                 }}
             }});
 
@@ -200,7 +191,8 @@ def render_chart():
                 borderUpColor: '#FFFFFF',
                 borderDownColor: '#FFFFFF',
                 wickUpColor: '#FFFFFF',
-                wickDownColor: '#FFFFFF'
+                wickDownColor: '#FFFFFF',
+                barWidth: 0.8
             }});
             const candlestickData = {candlestick_json};
 
@@ -402,6 +394,19 @@ def chatbot_interface():
 # Main app
 def main():
     st.title("TSLA Stock Dashboard")
+
+    # Load data for CSV download
+    df = load_data()
+    if not df.empty:
+        # Add a download button for the CSV file
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Data as CSV",
+            data=csv,
+            file_name="tsla_data.csv",
+            mime="text/csv",
+        )
+
     tab1, tab2 = st.tabs(["Candlestick Chart", "Chatbot"])
 
     with tab1:
